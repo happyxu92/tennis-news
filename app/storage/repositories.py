@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from datetime import date, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -51,6 +52,16 @@ class TournamentRepository:
                 Tournament.source_tournament_id == source_tournament_id,
             )
         )
+
+    def list_in_sync_window(self, utc_today: date, future_days: int) -> list[Tournament]:
+        window_end = utc_today + timedelta(days=future_days)
+        statement = (
+            select(Tournament)
+            .where(Tournament.end_date.is_not(None), Tournament.end_date >= utc_today)
+            .where(Tournament.start_date.is_not(None), Tournament.start_date <= window_end)
+            .order_by(Tournament.start_date.asc(), Tournament.id.asc())
+        )
+        return list(self.session.scalars(statement))
 
 
 class MatchRepository:
@@ -115,6 +126,44 @@ class MatchRepository:
         self.session.flush()
         return snapshot
 
+    def list_by_tournament_ids(self, tournament_ids: Iterable[int]) -> list[Match]:
+        ids = list(dict.fromkeys(tournament_ids))
+        if not ids:
+            return []
+
+        statement = select(Match).where(Match.tournament_id.in_(ids)).order_by(Match.id.asc())
+        return list(self.session.scalars(statement))
+
+    def list_recent_snapshots(
+        self,
+        match_ids: Iterable[int],
+        snapshot_type: str,
+        limit_per_match: int = 2,
+    ) -> dict[int, list[MatchSnapshot]]:
+        ids = list(dict.fromkeys(match_ids))
+        if not ids:
+            return {}
+
+        statement = (
+            select(MatchSnapshot)
+            .where(
+                MatchSnapshot.match_id.in_(ids),
+                MatchSnapshot.snapshot_type == snapshot_type,
+            )
+            .order_by(
+                MatchSnapshot.match_id.asc(),
+                MatchSnapshot.created_at.desc(),
+                MatchSnapshot.id.desc(),
+            )
+        )
+
+        grouped: dict[int, list[MatchSnapshot]] = {}
+        for snapshot in self.session.scalars(statement):
+            bucket = grouped.setdefault(snapshot.match_id, [])
+            if len(bucket) < limit_per_match:
+                bucket.append(snapshot)
+        return grouped
+
 
 class PublishJobRepository:
     """Persistence access for publish jobs."""
@@ -140,3 +189,24 @@ class PublishJobRepository:
         self.session.add(entity)
         self.session.flush()
         return entity
+
+    def get_by_biz_key_and_content_hash(
+        self,
+        job_type: str,
+        biz_key: str,
+        content_hash: str,
+    ) -> PublishJob | None:
+        statement = select(PublishJob).where(
+            PublishJob.job_type == job_type,
+            PublishJob.biz_key == biz_key,
+            PublishJob.content_hash == content_hash,
+        )
+        return self.session.scalar(statement)
+
+    def get_latest_by_biz_key(self, job_type: str, biz_key: str) -> PublishJob | None:
+        statement = (
+            select(PublishJob)
+            .where(PublishJob.job_type == job_type, PublishJob.biz_key == biz_key)
+            .order_by(PublishJob.created_at.desc(), PublishJob.id.desc())
+        )
+        return self.session.scalar(statement)

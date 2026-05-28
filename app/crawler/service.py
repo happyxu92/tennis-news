@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 
 import httpx
@@ -30,12 +31,22 @@ class CrawlerService:
         self.tournaments = TournamentRepository(session)
         self.matches = MatchRepository(session)
 
-    async def sync_all(self) -> CrawlBundle:
+    async def sync_all(self, now_utc: datetime | None = None) -> CrawlBundle:
         tournament_payloads = await self.client.fetch_tournaments()
+        utc_today = (now_utc or datetime.now(UTC)).date()
+        sync_window_end = utc_today + timedelta(days=3)
         normalized_tournaments = [
             self.adapter.normalize_tournament(item)
             for item in tournament_payloads
             if item.get("tournamentGroup") and item.get("year")
+        ]
+        normalized_tournaments = [
+            item
+            for item in normalized_tournaments
+            if item.end_date is not None
+            and item.start_date is not None
+            and item.end_date >= utc_today
+            and item.start_date <= sync_window_end
         ]
 
         stored_tournaments = self.tournaments.upsert_many(normalized_tournaments)
@@ -55,8 +66,46 @@ class CrawlerService:
                 )
                 continue
 
+            try:
+                oop_payloads = await self.client.fetch_order_of_play(
+                    tournament.source_tournament_id
+                )
+            except (httpx.HTTPError, ValueError, json.JSONDecodeError):
+                logger.exception(
+                    "failed to fetch order of play for tournament %s",
+                    tournament.source_tournament_id,
+                )
+                oop_payloads = []
+
+            oop_match_map = {
+                str(item.get("MatchId") or ""): item
+                for item in oop_payloads
+                if item.get("MatchId")
+            }
+
             for payload in match_payloads:
-                match = self.adapter.normalize_match(payload)
+                match_id = str(payload.get("MatchID") or "")
+                detail_payload: dict = {}
+                if match_id:
+                    try:
+                        detail_payload = await self.client.fetch_match_result(
+                            match_id,
+                            tournament.source_tournament_id,
+                        )
+                    except httpx.HTTPError:
+                        logger.exception(
+                            "failed to fetch match detail for %s in tournament %s",
+                            match_id,
+                            tournament.source_tournament_id,
+                        )
+
+                merged_payload = self.adapter.merge_match_payload(
+                    payload,
+                    oop_match_map.get(match_id),
+                    detail_payload,
+                )
+                match = self.adapter.normalize_match(merged_payload)
+                match.source_tournament_id = tournament.source_tournament_id
                 match.tournament_id = tournament_id_map.get(match.source_tournament_id)
                 normalized_matches.append(match)
 

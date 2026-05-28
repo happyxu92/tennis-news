@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import date
 
 from app.crawler.clients.wta import parse_wta_datetime
@@ -54,13 +55,14 @@ class WtaAdapter:
         player2_name = self._build_player_name(payload, "B")
         winner_name = self._resolve_winner_name(payload, player1_name, player2_name)
         score_text = payload.get("ScoreString") or None
+        scheduled_at_utc = self._resolve_scheduled_at(payload)
 
         return NormalizedMatch(
             source=self.source,
             source_match_id=str(payload.get("MatchID") or ""),
             source_tournament_id=source_tournament_id,
             round_name=self._map_round_name(payload.get("RoundID")),
-            scheduled_at_utc=parse_wta_datetime(payload.get("MatchTimeStamp")),
+            scheduled_at_utc=scheduled_at_utc,
             court_name=(payload.get("Venue") or {}).get("name"),
             player1_name=player1_name,
             player2_name=player2_name,
@@ -75,6 +77,23 @@ class WtaAdapter:
             metadata=payload,
         )
 
+    def merge_match_payload(self, base_payload: dict, *extra_payloads: dict | None) -> dict:
+        merged = deepcopy(base_payload)
+        for extra in extra_payloads:
+            if not extra:
+                continue
+            merged = self._deep_merge(merged, extra)
+
+        oop_court = merged.pop("_oop_court", None)
+        oop_day = merged.pop("_oop_day", None)
+        if oop_court or oop_day:
+            merged["oop"] = {}
+            if oop_day:
+                merged["oop"]["day"] = oop_day
+            if oop_court:
+                merged["oop"]["court"] = oop_court
+        return merged
+
     def _build_tournament_source_id(self, payload: dict) -> str:
         tournament_group = payload.get("tournamentGroup") or {}
         group_id = str(tournament_group.get("id") or payload.get("EventID") or "")
@@ -86,8 +105,13 @@ class WtaAdapter:
     def _normalize_tournament_name(self, payload: dict) -> str:
         title = payload.get("title") or ""
         if " - " in title:
-            return title.split(" - ", maxsplit=1)[0]
-        return title or (payload.get("tournamentGroup") or {}).get("name") or "Unknown tournament"
+            title = title.split(" - ", maxsplit=1)[0]
+        fallback = (
+            title
+            or (payload.get("tournamentGroup") or {}).get("name")
+            or "Unknown tournament"
+        )
+        return fallback.title()
 
     def _detect_tour(self, level: str | None, name: str) -> str:
         combined = f"{level or ''} {name}".lower()
@@ -152,6 +176,11 @@ class WtaAdapter:
             ]
         )
 
+    def _resolve_scheduled_at(self, payload: dict):
+        if payload.get("Unscheduled") is True and payload.get("isEstimatedStartTime") is True:
+            return None
+        return parse_wta_datetime(payload.get("MatchTimeStamp"))
+
     def _to_int(self, value: str | int | None) -> int | None:
         if value in (None, ""):
             return None
@@ -159,3 +188,16 @@ class WtaAdapter:
             return int(value)
         except (TypeError, ValueError):
             return None
+
+    def _deep_merge(self, base: dict, extra: dict) -> dict:
+        merged = deepcopy(base)
+        for key, value in extra.items():
+            if key.startswith("_oop_"):
+                merged[key] = value
+                continue
+            if isinstance(value, dict) and isinstance(merged.get(key), dict):
+                merged[key] = self._deep_merge(merged[key], value)
+                continue
+            if value not in (None, "", [], {}):
+                merged[key] = value
+        return merged

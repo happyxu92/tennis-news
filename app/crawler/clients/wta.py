@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
@@ -43,8 +44,61 @@ class WtaClient(TennisDataClient):
         )
         return payload.get("matches", [])
 
-    async def fetch_match_result(self, match_id: str) -> dict[str, Any]:
-        return {}
+    async def fetch_order_of_play(self, tournament_id: str) -> list[dict[str, Any]]:
+        event_id, event_year, _, _ = tournament_id.split(":", maxsplit=3)
+        payload = await self._get_json(f"/tournaments/{int(event_id)}/{event_year}/oop")
+        order_of_play = payload.get("orderOfPlay")
+        if not order_of_play:
+            return []
+
+        if isinstance(order_of_play, str):
+            parsed = json.loads(order_of_play)
+        elif isinstance(order_of_play, dict):
+            parsed = order_of_play
+        elif isinstance(order_of_play, list):
+            parsed = {"OOP": {"Schedule": {"Day": order_of_play}}}
+        else:
+            return []
+
+        schedule = (parsed.get("OOP") or {}).get("Schedule") or {}
+        days = _ensure_mapping_list(schedule.get("Day"))
+
+        matches: list[dict[str, Any]] = []
+        for day in days:
+            day_context = {
+                "display_date": day.get("DisplayDate"),
+                "iso_date": day.get("ISODate"),
+                "date_seq": day.get("Seq"),
+            }
+            for court in _ensure_mapping_list(day.get("Court")):
+                court_context = {
+                    "court_id": court.get("CourtId"),
+                    "court_name": court.get("CourtName"),
+                    "display_time": court.get("DisplayTime"),
+                    "utc_offset": court.get("UTCOffset"),
+                }
+                for match in _ensure_mapping_list((court.get("Matches") or {}).get("Match")):
+                    matches.append(
+                        {
+                            **match,
+                            "_oop_day": day_context,
+                            "_oop_court": court_context,
+                        }
+                    )
+
+        return matches
+
+    async def fetch_match_result(self, match_id: str, tournament_id: str) -> dict[str, Any]:
+        event_id, event_year, _, _ = tournament_id.split(":", maxsplit=3)
+        payload = await self._get_json(
+            f"/tournaments/{int(event_id)}/{event_year}/matches/{match_id}/score"
+        )
+        if isinstance(payload, list):
+            return payload[0] if payload else {}
+        if isinstance(payload, dict) and isinstance(payload.get("matches"), list):
+            matches = payload.get("matches") or []
+            return matches[0] if matches else {}
+        return payload if isinstance(payload, dict) else {}
 
     async def _get_json(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         headers = {
@@ -73,3 +127,15 @@ def parse_wta_datetime(value: str | None) -> datetime | None:
     if not value:
         return None
     return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
+
+
+def _ensure_list(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _ensure_mapping_list(value: Any) -> list[dict[str, Any]]:
+    return [item for item in _ensure_list(value) if isinstance(item, dict)]

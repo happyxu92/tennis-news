@@ -2,11 +2,12 @@
 
 网球赛事信息采集与微信公众号发布系统。
 
-当前已完成 PRD 第 1-3 阶段基础能力：
+当前已完成 PRD 第 1-4 阶段基础能力：
 
 1. 项目初始化
 2. 数据模型与存储
 3. WTA 官方页面抓取接入骨架
+4. 变化检测与重点比赛判定
 
 ## 目录
 
@@ -103,6 +104,45 @@ sqlite3 data/tennis_news.db
 select id, source_tournament_id, name, tour, level, start_date, end_date from tournaments order by start_date;
 ```
 
+## 查看比赛数据
+
+查看比赛总数：
+
+```bash
+sqlite3 data/tennis_news.db "select count(*) from matches;"
+```
+
+查看最新更新的 20 场比赛：
+
+```bash
+sqlite3 -header -column data/tennis_news.db "select m.id, coalesce(t.name, '<unlinked>') as tournament, m.source_match_id, m.round_name, m.scheduled_at_utc, m.court_name, m.player1_name, m.player2_name, m.status, m.score_text, m.winner_name from matches m left join tournaments t on t.id = m.tournament_id order by m.updated_at desc limit 20;"
+```
+
+按赛事汇总比赛数量：
+
+```bash
+sqlite3 -header -column data/tennis_news.db "select coalesce(t.name, '<unlinked>') as tournament, count(*) as total_matches, sum(case when m.status = 'finished' then 1 else 0 end) as finished_matches, sum(case when m.status in ('scheduled', 'in_progress', 'live', 'delayed') then 1 else 0 end) as active_matches, max(m.updated_at) as last_match_update from matches m left join tournaments t on t.id = m.tournament_id group by coalesce(t.name, '<unlinked>') order by last_match_update desc limit 20;"
+```
+
+查看指定球员相关比赛：
+
+```bash
+sqlite3 -header -column data/tennis_news.db "select m.id, coalesce(t.name, '<unlinked>') as tournament, m.round_name, m.scheduled_at_utc, m.player1_name, m.player2_name, m.status, m.score_text, m.winner_name from matches m left join tournaments t on t.id = m.tournament_id where m.player1_name like '%Zheng Qinwen%' or m.player2_name like '%Zheng Qinwen%' order by m.scheduled_at_utc desc;"
+```
+
+交互模式下查看比赛数据：
+
+```bash
+sqlite3 data/tennis_news.db
+.mode column
+.headers on
+select m.id, coalesce(t.name, '<unlinked>') as tournament, m.source_match_id, m.round_name, m.scheduled_at_utc, m.court_name, m.player1_name, m.player2_name, m.status, m.score_text, m.winner_name
+from matches m
+left join tournaments t on t.id = m.tournament_id
+order by m.updated_at desc
+limit 20;
+```
+
 ## 当前数据源状态
 
 当前默认数据源为 `WTA` 官方站页面抓取。
@@ -111,11 +151,13 @@ select id, source_tournament_id, name, tour, level, start_date, end_date from to
 
 1. 通过 `https://api.wtatennis.com/tennis/tournaments/` 抓取赛事列表
 2. 通过 `https://api.wtatennis.com/tennis/tournaments/{id}/{year}/matches` 抓取比赛赛程和赛果
-3. 将赛事与比赛标准化后落库
+3. 通过 `https://api.wtatennis.com/tennis/tournaments/{id}/{year}/oop` 融合场地补充信息
+4. 通过 `https://api.wtatennis.com/tennis/tournaments/{id}/{year}/matches/{matchId}/score` 深抓单场详情
+5. 将赛事与比赛标准化后落库
 
 暂未实现：
 
-1. `oop` 场地补充数据的完整融合
-2. 单场详情接口的深入抓取
+1. 单场详情抓取的并发优化与重试控制
+2. 更多详情字段的结构化落库
 
 说明：`/scores` 页面数据主要由前端异步加载，本项目当前已转为直接调用其内部 WTA API。

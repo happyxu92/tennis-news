@@ -16,5 +16,9 @@ class TennisDataClient(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    async def fetch_order_of_play(self, tournament_id: str) -> list[dict[str, Any]]:
+        raise NotImplementedError
+
+    @abstractmethod
     async def fetch_match_result(self, match_id: str) -> dict[str, Any]:
         raise NotImplementedError

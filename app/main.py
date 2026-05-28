@@ -5,6 +5,7 @@ import asyncio
 
 from app.crawler.service import CrawlerService
 from app.logging import configure_logging, get_logger
+from app.services.diff_service import DiffService
 from app.settings import get_settings
 from app.storage import create_engine_from_settings, create_session_factory, init_database
 
@@ -32,6 +33,8 @@ async def run_async(command: str) -> None:
     with session_factory() as session:
         crawler = CrawlerService(settings=settings, session=session)
         await crawler.sync_all()
+        diff_service = DiffService(settings=settings, session=session)
+        diff_service.detect_and_queue_jobs()
 
 
 def main() -> None:
