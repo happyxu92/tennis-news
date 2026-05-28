@@ -16,7 +16,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.base import Base
+from app.models.base import Base, UTCDateTime
 
 
 def utcnow() -> datetime:
@@ -43,11 +43,11 @@ class Tournament(Base):
     end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     metadata_json: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSON, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
+        UTCDateTime(),
         default=utcnow,
         onupdate=utcnow,
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
 
     matches: Mapped[list[Match]] = relationship(back_populates="tournament")
 
@@ -68,7 +68,7 @@ class Match(Base):
     )
     round_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     scheduled_at_utc: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
+        UTCDateTime(),
         nullable=True,
         index=True,
     )
@@ -85,11 +85,11 @@ class Match(Base):
     is_key_match: Mapped[bool] = mapped_column(Boolean, default=False)
     metadata_json: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSON, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
+        UTCDateTime(),
         default=utcnow,
         onupdate=utcnow,
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
 
     tournament: Mapped[Tournament | None] = relationship(back_populates="matches")
     snapshots: Mapped[list[MatchSnapshot]] = relationship(back_populates="match")
@@ -105,7 +105,7 @@ class MatchSnapshot(Base):
     snapshot_type: Mapped[str] = mapped_column(String(50), index=True)
     snapshot_hash: Mapped[str] = mapped_column(String(64), index=True)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
 
     match: Mapped[Match] = relationship(back_populates="snapshots")
 
@@ -126,9 +126,9 @@ class PublishJob(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
+        UTCDateTime(),
         default=utcnow,
         onupdate=utcnow,
     )
@@ -146,5 +146,5 @@ class PublishedArticle(Base):
     wechat_media_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     publish_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     article_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    published_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)

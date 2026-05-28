@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from datetime import date, timedelta
+from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.crawler.schemas import NormalizedMatch, NormalizedTournament
-from app.models import Match, MatchSnapshot, PublishJob, Tournament
+from app.models import Match, MatchSnapshot, PublishedArticle, PublishJob, Tournament
+
+UNSET = object()
 
 
 class TournamentRepository:
@@ -190,6 +193,27 @@ class PublishJobRepository:
         self.session.flush()
         return entity
 
+    def get_by_id(self, job_id: int) -> PublishJob | None:
+        return self.session.get(PublishJob, job_id)
+
+    def list_by_statuses(
+        self,
+        statuses: Iterable[str],
+        limit: int | None = None,
+    ) -> list[PublishJob]:
+        values = list(dict.fromkeys(statuses))
+        if not values:
+            return []
+
+        statement = (
+            select(PublishJob)
+            .where(PublishJob.status.in_(values))
+            .order_by(PublishJob.created_at.asc(), PublishJob.id.asc())
+        )
+        if limit is not None:
+            statement = statement.limit(limit)
+        return list(self.session.scalars(statement))
+
     def get_by_biz_key_and_content_hash(
         self,
         job_type: str,
@@ -210,3 +234,70 @@ class PublishJobRepository:
             .order_by(PublishJob.created_at.desc(), PublishJob.id.desc())
         )
         return self.session.scalar(statement)
+
+    def count_by_biz_key(self, job_type: str, biz_key: str) -> int:
+        statement = select(func.count(PublishJob.id)).where(
+            PublishJob.job_type == job_type,
+            PublishJob.biz_key == biz_key,
+        )
+        return int(self.session.scalar(statement) or 0)
+
+    def update(
+        self,
+        job: PublishJob,
+        *,
+        status: str | None = None,
+        payload_updates: dict[str, Any] | None = None,
+        error_message: str | object = UNSET,
+        increment_retry: bool = False,
+    ) -> PublishJob:
+        if status is not None:
+            job.status = status
+        if payload_updates:
+            payload = dict(job.payload or {})
+            payload.update(payload_updates)
+            job.payload = payload
+        if error_message is not UNSET:
+            job.error_message = error_message
+        if increment_retry:
+            job.retry_count += 1
+
+        self.session.add(job)
+        self.session.flush()
+        return job
+
+
+class PublishedArticleRepository:
+    """Persistence access for published article records."""
+
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def get_by_job_id(self, job_id: int) -> PublishedArticle | None:
+        statement = select(PublishedArticle).where(PublishedArticle.job_id == job_id)
+        return self.session.scalar(statement)
+
+    def upsert(
+        self,
+        *,
+        job_id: int,
+        title: str,
+        content_hash: str,
+        wechat_media_id: str | None = None,
+        publish_id: str | None = None,
+        article_url: str | None = None,
+        published_at=None,
+    ) -> PublishedArticle:
+        entity = self.get_by_job_id(job_id)
+        if entity is None:
+            entity = PublishedArticle(job_id=job_id, title=title, content_hash=content_hash)
+            self.session.add(entity)
+
+        entity.title = title
+        entity.content_hash = content_hash
+        entity.wechat_media_id = wechat_media_id
+        entity.publish_id = publish_id
+        entity.article_url = article_url
+        entity.published_at = published_at
+        self.session.flush()
+        return entity

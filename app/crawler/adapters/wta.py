@@ -146,9 +146,11 @@ class WtaAdapter:
             "F": "finished",
             "C": "cancelled",
             "S": "scheduled",
+            "U": "scheduled",
             "D": "delayed",
             "I": "in_progress",
             "L": "live",
+            "P": "in_progress",
         }
         return mapping.get((value or "").upper(), (value or "scheduled").lower())
 

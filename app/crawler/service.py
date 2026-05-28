@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from hashlib import sha256
 
 import httpx
@@ -9,12 +9,15 @@ from sqlalchemy.orm import Session
 
 from app.crawler.adapters import WtaAdapter
 from app.crawler.clients import WtaClient
+from app.crawler.clients.wta import parse_wta_datetime
 from app.crawler.schemas import CrawlBundle, NormalizedMatch
 from app.logging import get_logger
 from app.settings import AppSettings
 from app.storage.repositories import MatchRepository, TournamentRepository
 
 logger = get_logger(__name__)
+
+TOURNAMENT_FETCH_LOOKBACK_DAYS = 21
 
 
 class CrawlerService:
@@ -32,9 +35,13 @@ class CrawlerService:
         self.matches = MatchRepository(session)
 
     async def sync_all(self, now_utc: datetime | None = None) -> CrawlBundle:
-        tournament_payloads = await self.client.fetch_tournaments()
-        utc_today = (now_utc or datetime.now(UTC)).date()
+        current_time = now_utc or datetime.now(UTC)
+        utc_today = current_time.date()
         sync_window_end = utc_today + timedelta(days=3)
+        tournament_payloads = await self.client.fetch_tournaments(
+            from_date=utc_today - timedelta(days=TOURNAMENT_FETCH_LOOKBACK_DAYS),
+            to_date=sync_window_end,
+        )
         normalized_tournaments = [
             self.adapter.normalize_tournament(item)
             for item in tournament_payloads
@@ -85,8 +92,9 @@ class CrawlerService:
 
             for payload in match_payloads:
                 match_id = str(payload.get("MatchID") or "")
+                oop_payload = oop_match_map.get(match_id)
                 detail_payload: dict = {}
-                if match_id:
+                if match_id and self._should_fetch_match_result(payload, oop_payload, current_time):
                     try:
                         detail_payload = await self.client.fetch_match_result(
                             match_id,
@@ -101,7 +109,7 @@ class CrawlerService:
 
                 merged_payload = self.adapter.merge_match_payload(
                     payload,
-                    oop_match_map.get(match_id),
+                    oop_payload,
                     detail_payload,
                 )
                 match = self.adapter.normalize_match(merged_payload)
@@ -135,3 +143,29 @@ class CrawlerService:
             default=str,
         ).encode("utf-8")
         return sha256(encoded).hexdigest()
+
+    def _should_fetch_match_result(
+        self,
+        match_payload: dict,
+        oop_payload: dict | None,
+        current_time: datetime,
+    ) -> bool:
+        match_state = str(match_payload.get("MatchState") or "").upper()
+        if match_state in {"F", "I", "L", "P"}:
+            return True
+
+        scheduled_at = parse_wta_datetime(match_payload.get("MatchTimeStamp"))
+        if scheduled_at is not None:
+            return scheduled_at <= current_time
+
+        oop_day = (oop_payload or {}).get("_oop_day") or {}
+        iso_date = oop_day.get("iso_date")
+        if iso_date:
+            try:
+                return date.fromisoformat(iso_date) <= current_time.date()
+            except ValueError:
+                logger.warning("invalid oop iso_date %s", iso_date)
+
+        if match_state in {"S", "U"}:
+            return False
+        return True

@@ -5,6 +5,7 @@ import asyncio
 
 from app.crawler.service import CrawlerService
 from app.logging import configure_logging, get_logger
+from app.publisher import PublisherService
 from app.services.diff_service import DiffService
 from app.settings import get_settings
 from app.storage import create_engine_from_settings, create_session_factory, init_database
@@ -14,7 +15,11 @@ logger = get_logger(__name__)
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Tennis news automation entrypoint")
-    parser.add_argument("command", choices=["init-db", "sync"], help="Command to execute")
+    parser.add_argument(
+        "command",
+        choices=["init-db", "sync", "publish-pending", "check-publish-status"],
+        help="Command to execute",
+    )
     return parser
 
 
@@ -31,10 +36,21 @@ async def run_async(command: str) -> None:
         return
 
     with session_factory() as session:
-        crawler = CrawlerService(settings=settings, session=session)
-        await crawler.sync_all()
-        diff_service = DiffService(settings=settings, session=session)
-        diff_service.detect_and_queue_jobs()
+        if command == "sync":
+            crawler = CrawlerService(settings=settings, session=session)
+            await crawler.sync_all()
+            diff_service = DiffService(settings=settings, session=session)
+            diff_service.detect_and_queue_jobs()
+            return
+
+        publisher = PublisherService(settings=settings, session=session)
+        try:
+            if command == "publish-pending":
+                await publisher.dispatch_pending_jobs()
+            elif command == "check-publish-status":
+                await publisher.sync_publishing_jobs()
+        finally:
+            await publisher.aclose()
 
 
 def main() -> None:

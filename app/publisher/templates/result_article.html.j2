@@ -1,0 +1,20 @@
+<section style="font-size:16px;line-height:1.75;color:#1f2937;">
+  <p style="margin:0 0 8px;font-size:12px;font-weight:700;letter-spacing:0.08em;color:#dc2626;">赛事战报</p>
+  <h1 style="margin:0 0 12px;font-size:28px;line-height:1.35;color:#111827;">{{ title }}</h1>
+  <p style="margin:0 0 16px;font-size:15px;line-height:1.7;color:#475569;">{{ summary }}</p>
+  <section style="margin:0 0 18px;padding:18px 16px;border-radius:14px;background-color:#111827;color:#f9fafb;">
+    <p style="margin:0 0 8px;font-size:22px;line-height:1.45;font-weight:700;">{{ player1_name or "待定选手" }} vs {{ player2_name or "待定选手" }}</p>
+    <p style="margin:0 0 6px;font-size:26px;line-height:1.35;font-weight:800;">{{ score_text or "比分待更新" }}</p>
+    <p style="margin:0;font-size:14px;line-height:1.7;color:#d1d5db;">胜者：{{ winner_name or "待确认" }}</p>
+  </section>
+  <section style="margin:0 0 18px;padding:0 14px;border:1px solid #e5e7eb;border-radius:12px;">
+    <p style="margin:12px 0;padding-bottom:12px;border-bottom:1px solid #e5e7eb;font-size:14px;line-height:1.75;color:#334155;"><span style="display:inline-block;width:52px;color:#64748b;">赛事</span>{{ tournament_name or "赛事待确认" }}</p>
+    <p style="margin:12px 0;padding-bottom:12px;border-bottom:1px solid #e5e7eb;font-size:14px;line-height:1.75;color:#334155;"><span style="display:inline-block;width:52px;color:#64748b;">轮次</span>{{ round_name or "轮次待确认" }}</p>
+    <p style="margin:12px 0;padding-bottom:12px;border-bottom:1px solid #e5e7eb;font-size:14px;line-height:1.75;color:#334155;"><span style="display:inline-block;min-width:96px;color:#64748b;">时间（{{ timezone_label }}）</span>{{ time_text }}</p>
+    <p style="margin:12px 0;padding-bottom:12px;border-bottom:1px solid #e5e7eb;font-size:14px;line-height:1.75;color:#334155;"><span style="display:inline-block;width:52px;color:#64748b;">场地</span>{{ court_name or "待定场地" }}</p>
+    <p style="margin:12px 0;font-size:14px;line-height:1.75;color:#334155;"><span style="display:inline-block;width:52px;color:#64748b;">状态</span>{{ status_label }}</p>
+  </section>
+  <section style="padding:14px 16px;border-radius:12px;background-color:#f8fafc;">
+    <p style="margin:0;font-size:14px;line-height:1.85;color:#334155;">{{ lead_text }}</p>
+  </section>
+</section>

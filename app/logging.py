@@ -23,6 +23,18 @@ def configure_logging(level: str = "INFO") -> None:
                     "level": level,
                 }
             },
+            "loggers": {
+                "httpx": {
+                    "handlers": ["console"],
+                    "level": "WARNING",
+                    "propagate": False,
+                },
+                "httpcore": {
+                    "handlers": ["console"],
+                    "level": "WARNING",
+                    "propagate": False,
+                },
+            },
             "root": {"handlers": ["console"], "level": level},
         }
     )

@@ -91,12 +91,20 @@ class DiffService:
         for match in matches:
             match_date = self._match_date(match)
             if match.tournament_id is not None and match_date in schedule_target_dates:
-                schedule_matches_by_tournament.setdefault((match.tournament_id, match_date), []).append(match)
+                schedule_matches_by_tournament.setdefault(
+                    (match.tournament_id, match_date), []
+                ).append(match)
 
-            previous_payload = self._get_previous_snapshot_payload(snapshots_by_match_id.get(match.id, []))
+            previous_payload = self._get_previous_snapshot_payload(
+                snapshots_by_match_id.get(match.id, [])
+            )
             if match_date == utc_today:
                 if self._detect_result_change(match, previous_payload):
-                    tournament = tournament_map.get(match.tournament_id) if match.tournament_id else None
+                    tournament = (
+                        tournament_map.get(match.tournament_id)
+                        if match.tournament_id
+                        else None
+                    )
                     result.result_changes.append(
                         ResultChange(
                             tournament_id=match.tournament_id,
@@ -125,7 +133,10 @@ class DiffService:
                             )
                         )
 
-        for (tournament_id, target_date), schedule_matches in schedule_matches_by_tournament.items():
+        for (
+            tournament_id,
+            target_date,
+        ), schedule_matches in schedule_matches_by_tournament.items():
             tournament = tournament_map.get(tournament_id)
             if tournament is None:
                 continue
@@ -133,6 +144,7 @@ class DiffService:
                 tournament=tournament,
                 matches=schedule_matches,
                 target_date=target_date,
+                current_time=current_time,
                 result=result,
             )
 
@@ -150,20 +162,27 @@ class DiffService:
         tournament: Tournament,
         matches: list[Match],
         target_date: date,
+        current_time: datetime,
         result: DiffRunResult,
     ) -> None:
         if not matches:
             return
 
+        if not self._should_queue_schedule_job(matches, target_date, current_time):
+            return
+
         normalized_matches = sorted(matches, key=self._schedule_sort_key)
+        biz_key = f"schedule:{tournament.id}:{target_date.isoformat()}"
+        release_version = self.publish_jobs.count_by_biz_key(SCHEDULE_JOB_TYPE, biz_key) + 1
         payload = {
+            "source": tournament.source,
             "tournament_id": tournament.id,
             "tournament_name": tournament.name,
             "target_utc_date": target_date.isoformat(),
             "matches": [self._serialize_schedule_match(item) for item in normalized_matches],
             "is_update": False,
+            "release_version": release_version,
         }
-        biz_key = f"schedule:{tournament.id}:{target_date.isoformat()}"
         content_hash = self._build_hash(payload["matches"])
         if self.publish_jobs.get_by_biz_key_and_content_hash(
             SCHEDULE_JOB_TYPE,
@@ -185,6 +204,30 @@ class DiffService:
         )
         result.created_job_ids.append(job.id)
 
+    def _should_queue_schedule_job(
+        self,
+        matches: list[Match],
+        target_date: date,
+        current_time: datetime,
+    ) -> bool:
+        if self._all_matches_truly_scheduled(matches):
+            return True
+
+        if target_date != current_time.date():
+            return False
+
+        earliest_start = min(
+            (item.scheduled_at_utc for item in matches if item.scheduled_at_utc is not None),
+            default=None,
+        )
+        if earliest_start is None:
+            return False
+
+        return earliest_start - current_time < timedelta(hours=6)
+
+    def _all_matches_truly_scheduled(self, matches: list[Match]) -> bool:
+        return all(item.scheduled_at_utc is not None for item in matches)
+
     def _queue_result_job(
         self,
         match: Match,
@@ -202,6 +245,13 @@ class DiffService:
             "tournament_name": tournament.name if tournament else None,
             "target_utc_date": target_date.isoformat(),
             "round_name": match.round_name,
+            "scheduled_at_utc": self._serialize_datetime(match.scheduled_at_utc),
+            "scheduled_at_local": (
+                match.scheduled_at_utc.astimezone(self.article_timezone).isoformat()
+                if match.scheduled_at_utc is not None
+                else None
+            ),
+            "court_name": match.court_name,
             "player1_name": match.player1_name,
             "player2_name": match.player2_name,
             "score_text": match.score_text,
@@ -210,7 +260,11 @@ class DiffService:
         }
         biz_key = f"result:{match.id}"
         content_hash = self._build_hash(payload)
-        if self.publish_jobs.get_by_biz_key_and_content_hash(RESULT_JOB_TYPE, biz_key, content_hash):
+        if self.publish_jobs.get_by_biz_key_and_content_hash(
+            RESULT_JOB_TYPE,
+            biz_key,
+            content_hash,
+        ):
             return
 
         job = self.publish_jobs.create(
@@ -221,7 +275,11 @@ class DiffService:
         )
         result.created_job_ids.append(job.id)
 
-    def _detect_schedule_change_types(self, match: Match, previous_payload: dict | None) -> list[str]:
+    def _detect_schedule_change_types(
+        self,
+        match: Match,
+        previous_payload: dict | None,
+    ) -> list[str]:
         if previous_payload is None:
             return ["new_match"]
 
@@ -234,10 +292,10 @@ class DiffService:
             change_types.append("time_changed")
         if self._payload_value(previous_payload, "court_name") != match.court_name:
             change_types.append("court_changed")
-        if self._payload_value(previous_payload, "player1_name") != match.player1_name or self._payload_value(
-            previous_payload,
-            "player2_name",
-        ) != match.player2_name:
+        if (
+            self._payload_value(previous_payload, "player1_name") != match.player1_name
+            or self._payload_value(previous_payload, "player2_name") != match.player2_name
+        ):
             change_types.append("players_changed")
         if self._payload_value(previous_payload, "status") != match.status:
             change_types.append("status_changed")
@@ -267,6 +325,10 @@ class DiffService:
         iso_date = oop_day.get("iso_date")
         if iso_date:
             return date.fromisoformat(iso_date)
+
+        raw_match_time = parse_wta_datetime(metadata.get("MatchTimeStamp"))
+        if raw_match_time is not None:
+            return raw_match_time.astimezone(UTC).date()
         return None
 
     def _is_key_match(self, match: Match) -> bool:
@@ -340,9 +402,11 @@ class DiffService:
                 "F": "finished",
                 "C": "cancelled",
                 "S": "scheduled",
+                "U": "scheduled",
                 "D": "delayed",
                 "I": "in_progress",
                 "L": "live",
+                "P": "in_progress",
             }
             value = payload.get("MatchState")
             return mapping.get((value or "").upper(), (value or "scheduled").lower())
@@ -369,5 +433,10 @@ class DiffService:
         return value.astimezone(UTC).isoformat()
 
     def _build_hash(self, payload: object) -> str:
-        encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
+        encoded = json.dumps(
+            payload,
+            sort_keys=True,
+            ensure_ascii=False,
+            default=str,
+        ).encode("utf-8")
         return sha256(encoded).hexdigest()

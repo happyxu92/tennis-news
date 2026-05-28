@@ -1,4 +1,5 @@
 import json
+from datetime import date
 
 import pytest
 
@@ -13,6 +14,28 @@ def test_fetch_matches_expects_compound_tournament_id() -> None:
     assert event_year == "2026"
     assert start_date == "2026-01-04"
     assert end_date == "2026-01-11"
+
+
+@pytest.mark.asyncio
+async def test_fetch_tournaments_uses_requested_date_window(monkeypatch) -> None:
+    client = WtaClient(base_url="https://www.wtatennis.com")
+
+    async def fake_get_json(path: str, params=None):
+        assert path == "/tournaments/"
+        assert params == {
+            "page": 0,
+            "pageSize": 200,
+            "excludeLevels": "ITF",
+            "from": "2026-05-08",
+            "to": "2026-05-29",
+        }
+        return {"content": [{"id": 1}]}
+
+    monkeypatch.setattr(client, "_get_json", fake_get_json)
+
+    payload = await client.fetch_tournaments(date(2026, 5, 8), date(2026, 5, 29))
+
+    assert payload == [{"id": 1}]
 
 
 @pytest.mark.asyncio

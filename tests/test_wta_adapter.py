@@ -132,4 +132,4 @@ def test_normalize_match_clears_placeholder_time_for_unscheduled_estimate() -> N
     )
 
     assert normalized.scheduled_at_utc is None
-    assert normalized.status == "u"
+    assert normalized.status == "scheduled"

@@ -31,6 +31,15 @@ class AppSettings(BaseSettings):
     sync_tours: tuple[str, ...] = ("grand_slam", "atp", "wta")
     focus_countries: tuple[str, ...] = ("CHN",)
     wechat_publish_enabled: bool = False
+    wechat_app_id: str = ""
+    wechat_app_secret: str = ""
+    wechat_author: str = "tennis-news"
+    wechat_default_cover_media_id: str = ""
+    wechat_default_cover_image_path: str = ""
+    wechat_timeout_seconds: float = 20.0
+    wechat_publish_poll_interval_seconds: float = 5.0
+    wechat_publish_poll_timeout_seconds: float = 120.0
+    wechat_publish_max_retries: int = 3
 
     article_timezone: str = "Asia/Shanghai"
     media_storage_dir: str = "data/media"

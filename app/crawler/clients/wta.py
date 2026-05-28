@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from typing import Any
 
 import httpx
@@ -20,18 +20,19 @@ class WtaClient(TennisDataClient):
         self.api_base_url = "https://api.wtatennis.com/tennis"
         self.timeout_seconds = timeout_seconds
 
-    async def fetch_tournaments(self) -> list[dict[str, Any]]:
-        today = date.today()
-        lookback = today - timedelta(days=180)
-        horizon = today + timedelta(days=365)
+    async def fetch_tournaments(
+        self,
+        from_date: date,
+        to_date: date,
+    ) -> list[dict[str, Any]]:
         payload = await self._get_json(
             "/tournaments/",
             params={
                 "page": 0,
                 "pageSize": 200,
                 "excludeLevels": "ITF",
-                "from": lookback.isoformat(),
-                "to": horizon.isoformat(),
+                "from": from_date.isoformat(),
+                "to": to_date.isoformat(),
             },
         )
         return payload.get("content", [])

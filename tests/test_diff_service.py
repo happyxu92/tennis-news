@@ -151,12 +151,19 @@ def test_detect_and_queue_jobs_creates_next_day_schedule_job_and_same_day_result
         assert len(jobs) == 3
         assert jobs[0].job_type == "result_article"
         assert jobs[0].biz_key == f"result:{today_match[0].id}"
+        assert jobs[0].payload["scheduled_at_utc"] == "2026-05-28T10:00:00+00:00"
+        assert jobs[0].payload["scheduled_at_local"] == "2026-05-28T18:00:00+08:00"
+        assert jobs[0].payload["court_name"] is None
         assert jobs[1].job_type == "schedule_article"
         assert jobs[1].biz_key == f"schedule:{tournament.id}:2026-05-28"
         assert jobs[1].payload["is_update"] is False
+        assert jobs[1].payload["release_version"] == 1
+        assert jobs[1].payload["source"] == "wta"
         assert jobs[2].job_type == "schedule_article"
         assert jobs[2].biz_key == f"schedule:{tournament.id}:2026-05-29"
         assert jobs[2].payload["is_update"] is False
+        assert jobs[2].payload["release_version"] == 1
+        assert jobs[2].payload["source"] == "wta"
 
 
 def test_detect_and_queue_jobs_creates_today_schedule_job_when_missing() -> None:
@@ -228,6 +235,7 @@ def test_detect_and_queue_jobs_creates_today_schedule_job_when_missing() -> None
         assert jobs[0].biz_key == f"schedule:{tournament.id}:2026-05-28"
         assert jobs[0].payload["target_utc_date"] == "2026-05-28"
         assert jobs[0].payload["is_update"] is False
+        assert jobs[0].payload["release_version"] == 1
 
 
 def test_detect_and_queue_jobs_marks_schedule_job_as_update_when_content_changes() -> None:
@@ -324,6 +332,7 @@ def test_detect_and_queue_jobs_marks_schedule_job_as_update_when_content_changes
         assert len(jobs) == 2
         assert jobs[1].payload["is_update"] is True
         assert jobs[1].payload["previous_job_id"] == jobs[0].id
+        assert jobs[1].payload["release_version"] == 2
 
 
 def test_detect_and_queue_jobs_updates_today_schedule_job_when_content_changes() -> None:
@@ -421,6 +430,7 @@ def test_detect_and_queue_jobs_updates_today_schedule_job_when_content_changes()
         assert jobs[1].biz_key == f"schedule:{tournament.id}:2026-05-28"
         assert jobs[1].payload["is_update"] is True
         assert jobs[1].payload["previous_job_id"] == jobs[0].id
+        assert jobs[1].payload["release_version"] == 2
 
 
 def test_detect_and_queue_jobs_is_idempotent_for_existing_content_hash() -> None:
@@ -603,3 +613,247 @@ def test_detect_and_queue_jobs_skips_non_key_match_results() -> None:
         assert len(jobs) == 1
         assert jobs[0].job_type == "schedule_article"
         assert jobs[0].biz_key == f"schedule:{tournament.id}:2026-05-28"
+
+
+def test_detect_and_queue_jobs_skips_today_schedule_when_partial_and_far_away() -> None:
+    session_factory = _build_service()
+
+    with session_factory() as session:
+        tournament_repo = TournamentRepository(session)
+        match_repo = MatchRepository(session)
+
+        tournament = tournament_repo.upsert_many(
+            [
+                NormalizedTournament(
+                    source="wta",
+                    source_tournament_id="800:2026:2026-05-28:2026-06-02",
+                    name="Roland Garros",
+                    tour="grand_slam",
+                    start_date=date(2026, 5, 28),
+                    end_date=date(2026, 6, 2),
+                )
+            ]
+        )[0]
+        session.flush()
+
+        matches = match_repo.upsert_many(
+            [
+                NormalizedMatch(
+                    source="wta",
+                    source_match_id="today-arranged",
+                    source_tournament_id=tournament.source_tournament_id,
+                    tournament_id=tournament.id,
+                    round_name="Quarterfinal",
+                    scheduled_at_utc=datetime(2026, 5, 28, 13, 30, tzinfo=UTC),
+                    player1_name="Player A",
+                    player2_name="Player B",
+                    status="scheduled",
+                    metadata={
+                        "MatchState": "S",
+                        "RoundID": "5",
+                        "MatchTimeStamp": "2026-05-28T13:30:00+00:00",
+                    },
+                ),
+                NormalizedMatch(
+                    source="wta",
+                    source_match_id="today-unarranged",
+                    source_tournament_id=tournament.source_tournament_id,
+                    tournament_id=tournament.id,
+                    round_name="Quarterfinal",
+                    scheduled_at_utc=None,
+                    player1_name="Player C",
+                    player2_name="Player D",
+                    status="scheduled",
+                    metadata={
+                        "MatchState": "U",
+                        "MatchTimeStamp": "2026-05-28T17:00:00+00:00",
+                        "Unscheduled": True,
+                        "isEstimatedStartTime": True,
+                        "RoundID": "5",
+                    },
+                ),
+            ]
+        )
+        session.flush()
+
+        for match in matches:
+            match_repo.create_snapshot(
+                match_id=match.id,
+                snapshot_type="upstream_sync",
+                snapshot_hash=f"snapshot-{match.id}",
+                payload=match.metadata_json,
+            )
+        session.commit()
+
+        service = DiffService(settings=AppSettings(), session=session)
+        service.detect_and_queue_jobs(now_utc=datetime(2026, 5, 28, 6, 0, tzinfo=UTC))
+
+        jobs = session.scalars(
+            select(PublishJob)
+            .where(PublishJob.job_type == "schedule_article")
+            .order_by(PublishJob.id.asc())
+        ).all()
+
+        assert jobs == []
+
+
+def test_detect_and_queue_jobs_creates_today_schedule_when_partial_and_near_start() -> None:
+    session_factory = _build_service()
+
+    with session_factory() as session:
+        tournament_repo = TournamentRepository(session)
+        match_repo = MatchRepository(session)
+
+        tournament = tournament_repo.upsert_many(
+            [
+                NormalizedTournament(
+                    source="wta",
+                    source_tournament_id="800:2026:2026-05-28:2026-06-02",
+                    name="Roland Garros",
+                    tour="grand_slam",
+                    start_date=date(2026, 5, 28),
+                    end_date=date(2026, 6, 2),
+                )
+            ]
+        )[0]
+        session.flush()
+
+        matches = match_repo.upsert_many(
+            [
+                NormalizedMatch(
+                    source="wta",
+                    source_match_id="today-arranged",
+                    source_tournament_id=tournament.source_tournament_id,
+                    tournament_id=tournament.id,
+                    round_name="Quarterfinal",
+                    scheduled_at_utc=datetime(2026, 5, 28, 13, 30, tzinfo=UTC),
+                    player1_name="Player A",
+                    player2_name="Player B",
+                    status="scheduled",
+                    metadata={
+                        "MatchState": "S",
+                        "RoundID": "5",
+                        "MatchTimeStamp": "2026-05-28T13:30:00+00:00",
+                    },
+                ),
+                NormalizedMatch(
+                    source="wta",
+                    source_match_id="today-unarranged",
+                    source_tournament_id=tournament.source_tournament_id,
+                    tournament_id=tournament.id,
+                    round_name="Quarterfinal",
+                    scheduled_at_utc=None,
+                    player1_name="Player C",
+                    player2_name="Player D",
+                    status="scheduled",
+                    metadata={
+                        "MatchState": "U",
+                        "MatchTimeStamp": "2026-05-28T17:00:00+00:00",
+                        "Unscheduled": True,
+                        "isEstimatedStartTime": True,
+                        "RoundID": "5",
+                    },
+                ),
+            ]
+        )
+        session.flush()
+
+        for match in matches:
+            match_repo.create_snapshot(
+                match_id=match.id,
+                snapshot_type="upstream_sync",
+                snapshot_hash=f"snapshot-{match.id}",
+                payload=match.metadata_json,
+            )
+        session.commit()
+
+        service = DiffService(settings=AppSettings(), session=session)
+        service.detect_and_queue_jobs(now_utc=datetime(2026, 5, 28, 8, 0, tzinfo=UTC))
+
+        jobs = session.scalars(
+            select(PublishJob)
+            .where(PublishJob.job_type == "schedule_article")
+            .order_by(PublishJob.id.asc())
+        ).all()
+
+        assert len(jobs) == 1
+        assert jobs[0].payload["release_version"] == 1
+
+
+def test_detect_and_queue_jobs_preserves_utc_match_times_after_sqlite_round_trip() -> None:
+    session_factory = _build_service()
+
+    with session_factory() as session:
+        tournament_repo = TournamentRepository(session)
+        match_repo = MatchRepository(session)
+
+        tournament = tournament_repo.upsert_many(
+            [
+                NormalizedTournament(
+                    source="wta",
+                    source_tournament_id="903:2026:2026-05-24:2026-06-07",
+                    name="Roland Garros",
+                    tour="grand_slam",
+                    start_date=date(2026, 5, 24),
+                    end_date=date(2026, 6, 7),
+                )
+            ]
+        )[0]
+        session.flush()
+
+        match = match_repo.upsert_many(
+            [
+                NormalizedMatch(
+                    source="wta",
+                    source_match_id="LS71563958",
+                    source_tournament_id=tournament.source_tournament_id,
+                    tournament_id=tournament.id,
+                    round_name="Round 3",
+                    scheduled_at_utc=datetime(2026, 5, 29, 9, 0, tzinfo=UTC),
+                    court_name="Court 7",
+                    player1_name="Xiyu Wang",
+                    player2_name="Yuliia Starodubtseva",
+                    player1_country="CHN",
+                    player2_country="UKR",
+                    status="scheduled",
+                    is_key_match=True,
+                    metadata={
+                        "MatchState": "U",
+                        "MatchTimeStamp": "2026-05-29T09:00:00+00:00",
+                        "NotBefore": "Starting at 11:00 AM",
+                        "NotBeforeISOTime": "11:00+0200",
+                        "PlayerNameFirstA": "Xiyu",
+                        "PlayerNameLastA": "Wang",
+                        "PlayerNameFirstB": "Yuliia",
+                        "PlayerNameLastB": "Starodubtseva",
+                        "PlayerCountryA": "CHN",
+                        "PlayerCountryB": "UKR",
+                        "RoundID": "3",
+                        "Venue": {"name": "Court 7"},
+                    },
+                )
+            ]
+        )[0]
+        session.flush()
+
+        match_repo.create_snapshot(
+            match_id=match.id,
+            snapshot_type="upstream_sync",
+            snapshot_hash="new",
+            payload=match.metadata_json,
+        )
+        session.commit()
+
+    with session_factory() as session:
+        service = DiffService(settings=AppSettings(), session=session)
+        service.detect_and_queue_jobs(now_utc=datetime(2026, 5, 28, 12, 0, tzinfo=UTC))
+
+        jobs = session.scalars(
+            select(PublishJob)
+            .where(PublishJob.job_type == "schedule_article")
+            .order_by(PublishJob.id.asc())
+        ).all()
+
+        assert len(jobs) == 1
+        assert jobs[0].payload["matches"][0]["scheduled_at_utc"] == "2026-05-29T09:00:00+00:00"
+        assert jobs[0].payload["matches"][0]["scheduled_at_local"] == "2026-05-29T17:00:00+08:00"
