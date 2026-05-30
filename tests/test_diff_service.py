@@ -1055,3 +1055,87 @@ def test_detect_and_queue_jobs_preserves_utc_match_times_after_sqlite_round_trip
         assert len(jobs) == 1
         assert jobs[0].payload["matches"][0]["scheduled_at_utc"] == "2026-05-29T09:00:00+00:00"
         assert jobs[0].payload["matches"][0]["scheduled_at_local"] == "2026-05-29T17:00:00+08:00"
+
+
+def test_detect_and_queue_jobs_uses_oop_court_name_in_snapshot_comparison() -> None:
+    session_factory = _build_service()
+
+    with session_factory() as session:
+        tournament_repo = TournamentRepository(session)
+        match_repo = MatchRepository(session)
+
+        tournament = tournament_repo.upsert_many(
+            [
+                NormalizedTournament(
+                    source="wta",
+                    source_tournament_id="903:2026:2026-05-24:2026-06-07",
+                    name="Roland Garros",
+                    tour="grand_slam",
+                    start_date=date(2026, 5, 24),
+                    end_date=date(2026, 6, 7),
+                )
+            ]
+        )[0]
+        session.flush()
+
+        match = match_repo.upsert_many(
+            [
+                NormalizedMatch(
+                    source="wta",
+                    source_match_id="LS71563884",
+                    source_tournament_id=tournament.source_tournament_id,
+                    tournament_id=tournament.id,
+                    round_name="Round 3",
+                    scheduled_at_utc=datetime(2026, 5, 29, 14, 0, tzinfo=UTC),
+                    court_name="Court Philippe Chatrier",
+                    player1_name="Coco Gauff",
+                    player2_name="Anastasia Potapova",
+                    status="scheduled",
+                    is_key_match=True,
+                    metadata={
+                        "MatchState": "U",
+                        "MatchTimeStamp": "2026-05-29T14:00:00+00:00",
+                        "PlayerNameFirstA": "Coco",
+                        "PlayerNameLastA": "Gauff",
+                        "PlayerNameFirstB": "Anastasia",
+                        "PlayerNameLastB": "Potapova",
+                        "RoundID": "3",
+                        "oop": {
+                            "day": {"iso_date": "2026-05-29", "date_seq": "12"},
+                            "court": {
+                                "court_name": "Court Philippe Chatrier",
+                                "court_id": "PC",
+                            },
+                        },
+                    },
+                )
+            ]
+        )[0]
+        session.flush()
+
+        match_repo.create_snapshot(
+            match_id=match.id,
+            snapshot_type="upstream_sync",
+            snapshot_hash="old",
+            payload=match.metadata_json,
+        )
+        match_repo.create_snapshot(
+            match_id=match.id,
+            snapshot_type="upstream_sync",
+            snapshot_hash="new",
+            payload=match.metadata_json,
+        )
+        session.commit()
+
+        service = DiffService(settings=AppSettings(), session=session)
+        result = service.detect_and_queue_jobs(now_utc=datetime(2026, 5, 28, 12, 0, tzinfo=UTC))
+
+        jobs = session.scalars(
+            select(PublishJob)
+            .where(PublishJob.job_type == "schedule_article")
+            .order_by(PublishJob.id.asc())
+        ).all()
+
+        assert result.schedule_changes == []
+        assert len(jobs) == 1
+        assert jobs[0].payload["matches"][0]["court_name"] == "Court Philippe Chatrier"

@@ -28,6 +28,7 @@ class AppSettings(BaseSettings):
     source_timeout_seconds: float = 20.0
 
     sync_enabled: bool = True
+    scheduler_interval_minutes: int = Field(default=15, ge=1)
     sync_tours: tuple[str, ...] = ("grand_slam", "atp", "wta")
     focus_countries: tuple[str, ...] = ("CHN",)
     wechat_publish_enabled: bool = False

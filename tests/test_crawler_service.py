@@ -136,7 +136,14 @@ class FutureScheduledStubWtaClient(StubWtaClient):
 
     async def fetch_order_of_play(self, tournament_id: str) -> list[dict]:
         assert tournament_id == "800:2026:2026-01-04:2026-01-11"
-        return []
+        return [
+            {
+                "MatchId": "LS039",
+                "NotBeforeText": "NB 11:00",
+                "_oop_day": {"iso_date": "2026-01-06", "date_seq": "3"},
+                "_oop_court": {"court_name": "Court 7", "court_id": "C7"},
+            }
+        ]
 
     async def fetch_match_result(self, match_id: str, tournament_id: str) -> dict:
         self.detail_requests.append((match_id, tournament_id))
@@ -159,7 +166,10 @@ async def test_sync_all_skips_match_detail_for_future_scheduled_match() -> None:
         assert len(bundle.matches) == 1
         assert bundle.matches[0].status == "scheduled"
         assert bundle.matches[0].score_text is None
+        assert bundle.matches[0].court_name == "Court 7"
 
         stored = session.query(Match).one()
+        assert stored.court_name == "Court 7"
         assert stored.status == "scheduled"
         assert stored.score_text is None
+        assert stored.metadata_json["oop"]["court"]["court_name"] == "Court 7"

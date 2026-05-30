@@ -402,7 +402,7 @@ class DiffService:
             value = parse_wta_datetime(payload.get("MatchTimeStamp"))
             return self._serialize_datetime(value)
         if field == "court_name":
-            return (payload.get("Venue") or {}).get("name")
+            return self._resolve_payload_court_name(payload)
         if field == "player1_name":
             return self._build_player_name(payload, "A")
         if field == "player2_name":
@@ -436,6 +436,15 @@ class DiffService:
         last = payload.get(f"PlayerNameLast{suffix}") or ""
         name = f"{first} {last}".strip()
         return name or None
+
+    def _resolve_payload_court_name(self, payload: dict) -> str | None:
+        venue_name = ((payload.get("Venue") or {}).get("name") or "").strip()
+        if venue_name:
+            return venue_name
+
+        oop_court = ((payload.get("oop") or {}).get("court") or payload.get("_oop_court") or {})
+        court_name = (oop_court.get("court_name") or "").strip()
+        return court_name or None
 
     def _serialize_datetime(self, value: datetime | None) -> str | None:
         if value is None:

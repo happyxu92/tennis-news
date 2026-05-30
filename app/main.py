@@ -3,10 +3,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 
-from app.crawler.service import CrawlerService
 from app.logging import configure_logging, get_logger
-from app.publisher import PublisherService
-from app.services.diff_service import DiffService
+from app.services.dispatch_service import DispatchService
+from app.services.scheduler_service import SchedulerService
+from app.services.sync_service import SyncService
 from app.settings import get_settings
 from app.storage import create_engine_from_settings, create_session_factory, init_database
 
@@ -17,7 +17,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Tennis news automation entrypoint")
     parser.add_argument(
         "command",
-        choices=["init-db", "sync", "publish-pending", "check-publish-status"],
+        choices=[
+            "init-db",
+            "sync",
+            "publish-pending",
+            "check-publish-status",
+            "run-scheduler",
+        ],
         help="Command to execute",
     )
     return parser
@@ -35,27 +41,39 @@ async def run_async(command: str) -> None:
         logger.info("database initialized")
         return
 
+    if command == "run-scheduler":
+        scheduler_service = SchedulerService(
+            settings=settings,
+            session_factory=session_factory,
+        )
+        try:
+            await scheduler_service.run_forever()
+        finally:
+            scheduler_service.shutdown()
+        return
+
     with session_factory() as session:
         if command == "sync":
-            crawler = CrawlerService(settings=settings, session=session)
-            await crawler.sync_all()
-            diff_service = DiffService(settings=settings, session=session)
-            diff_service.detect_and_queue_jobs()
+            sync_service = SyncService(settings=settings, session=session)
+            await sync_service.run_once()
             return
 
-        publisher = PublisherService(settings=settings, session=session)
+        dispatch_service = DispatchService(settings=settings, session=session)
         try:
             if command == "publish-pending":
-                await publisher.dispatch_pending_jobs()
+                await dispatch_service.dispatch_pending_jobs()
             elif command == "check-publish-status":
-                await publisher.sync_publishing_jobs()
+                await dispatch_service.sync_publishing_jobs()
         finally:
-            await publisher.aclose()
+            await dispatch_service.aclose()
 
 
 def main() -> None:
     args = build_parser().parse_args()
-    asyncio.run(run_async(args.command))
+    try:
+        asyncio.run(run_async(args.command))
+    except KeyboardInterrupt:
+        logger.info("shutdown requested")
 
 
 if __name__ == "__main__":

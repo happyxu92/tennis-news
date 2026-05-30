@@ -63,7 +63,7 @@ class WtaAdapter:
             source_tournament_id=source_tournament_id,
             round_name=self._map_round_name(payload.get("RoundID")),
             scheduled_at_utc=scheduled_at_utc,
-            court_name=(payload.get("Venue") or {}).get("name"),
+            court_name=self._resolve_court_name(payload),
             player1_name=player1_name,
             player2_name=player2_name,
             player1_country=payload.get("PlayerCountryA") or None,
@@ -182,6 +182,15 @@ class WtaAdapter:
         if payload.get("Unscheduled") is True and payload.get("isEstimatedStartTime") is True:
             return None
         return parse_wta_datetime(payload.get("MatchTimeStamp"))
+
+    def _resolve_court_name(self, payload: dict) -> str | None:
+        venue_name = ((payload.get("Venue") or {}).get("name") or "").strip()
+        if venue_name:
+            return venue_name
+
+        oop_court = ((payload.get("oop") or {}).get("court") or payload.get("_oop_court") or {})
+        court_name = (oop_court.get("court_name") or "").strip()
+        return court_name or None
 
     def _to_int(self, value: str | int | None) -> int | None:
         if value in (None, ""):

@@ -48,17 +48,8 @@ class WtaClient(TennisDataClient):
     async def fetch_order_of_play(self, tournament_id: str) -> list[dict[str, Any]]:
         event_id, event_year, _, _ = tournament_id.split(":", maxsplit=3)
         payload = await self._get_json(f"/tournaments/{int(event_id)}/{event_year}/oop")
-        order_of_play = payload.get("orderOfPlay")
-        if not order_of_play:
-            return []
-
-        if isinstance(order_of_play, str):
-            parsed = json.loads(order_of_play)
-        elif isinstance(order_of_play, dict):
-            parsed = order_of_play
-        elif isinstance(order_of_play, list):
-            parsed = {"OOP": {"Schedule": {"Day": order_of_play}}}
-        else:
+        parsed = _normalize_order_of_play(payload.get("orderOfPlay"))
+        if not parsed:
             return []
 
         schedule = (parsed.get("OOP") or {}).get("Schedule") or {}
@@ -140,3 +131,34 @@ def _ensure_list(value: Any) -> list[Any]:
 
 def _ensure_mapping_list(value: Any) -> list[dict[str, Any]]:
     return [item for item in _ensure_list(value) if isinstance(item, dict)]
+
+
+def _normalize_order_of_play(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        try:
+            return _normalize_order_of_play(json.loads(value))
+        except json.JSONDecodeError:
+            return None
+    if isinstance(value, dict):
+        if "OOP" in value:
+            return value
+        if "Schedule" in value:
+            return {"OOP": value}
+        if "Day" in value:
+            return {"OOP": {"Schedule": value}}
+        if any(key in value for key in ("ISODate", "DisplayDate", "Court")):
+            return {"OOP": {"Schedule": {"Day": value}}}
+        return None
+    if isinstance(value, list):
+        mapping_items = [item for item in value if isinstance(item, dict)]
+        if mapping_items:
+            if len(mapping_items) == 1 and "OOP" in mapping_items[0]:
+                return mapping_items[0]
+            return {"OOP": {"Schedule": {"Day": mapping_items}}}
+        for item in value:
+            parsed = _normalize_order_of_play(item)
+            if parsed is not None:
+                return parsed
+    return None

@@ -158,6 +158,67 @@ async def test_fetch_order_of_play_accepts_list_payload(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_fetch_order_of_play_accepts_string_list_payload(monkeypatch) -> None:
+    client = WtaClient(base_url="https://www.wtatennis.com")
+
+    async def fake_get_json(path: str, params=None):
+        assert path == "/tournaments/800/2026/oop"
+        assert params is None
+        return {
+            "orderOfPlay": [
+                json.dumps(
+                    {
+                        "OOP": {
+                            "Schedule": {
+                                "Day": [
+                                    {
+                                        "DisplayDate": "Sunday",
+                                        "ISODate": "2026-01-04",
+                                        "Seq": "1",
+                                        "Court": [
+                                            {
+                                                "CourtId": "PC",
+                                                "CourtName": "Court Philippe Chatrier",
+                                                "Matches": {
+                                                    "Match": [
+                                                        {"MatchId": "LS101", "Status": "S"}
+                                                    ]
+                                                },
+                                            }
+                                        ],
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                )
+            ]
+        }
+
+    monkeypatch.setattr(client, "_get_json", fake_get_json)
+
+    matches = await client.fetch_order_of_play("800:2026:2026-01-04:2026-01-11")
+
+    assert matches == [
+        {
+            "MatchId": "LS101",
+            "Status": "S",
+            "_oop_day": {
+                "display_date": "Sunday",
+                "iso_date": "2026-01-04",
+                "date_seq": "1",
+            },
+            "_oop_court": {
+                "court_id": "PC",
+                "court_name": "Court Philippe Chatrier",
+                "display_time": None,
+                "utc_offset": None,
+            },
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_fetch_order_of_play_ignores_non_mapping_nodes(monkeypatch) -> None:
     client = WtaClient(base_url="https://www.wtatennis.com")
 
