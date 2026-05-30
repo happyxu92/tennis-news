@@ -316,7 +316,12 @@ class DiffService:
             return True
 
         previous_status = self._payload_value(previous_payload, "status")
-        return previous_status not in FINISHED_STATUSES
+        if previous_status not in FINISHED_STATUSES:
+            return True
+
+        previous_score_text = self._payload_value(previous_payload, "score_text")
+        previous_winner_name = self._payload_value(previous_payload, "winner_name")
+        return not previous_score_text or not previous_winner_name
 
     def _get_previous_snapshot_payload(self, snapshots: list) -> dict | None:
         if len(snapshots) < 2:

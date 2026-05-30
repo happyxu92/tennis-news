@@ -909,6 +909,114 @@ def test_detect_and_queue_jobs_skips_non_key_match_results() -> None:
         assert jobs[0].biz_key == f"schedule:{tournament.id}:2026-05-28"
 
 
+def test_detect_and_queue_jobs_creates_result_job_when_winner_arrives_after_finished() -> None:
+    session_factory = _build_service()
+
+    with session_factory() as session:
+        tournament_repo = TournamentRepository(session)
+        match_repo = MatchRepository(session)
+
+        tournament = tournament_repo.upsert_many(
+            [
+                NormalizedTournament(
+                    source="wta",
+                    source_tournament_id="800:2026:2026-05-28:2026-06-02",
+                    name="Roland Garros",
+                    tour="grand_slam",
+                    start_date=date(2026, 5, 28),
+                    end_date=date(2026, 6, 2),
+                )
+            ]
+        )[0]
+        session.flush()
+
+        match = match_repo.upsert_many(
+            [
+                NormalizedMatch(
+                    source="wta",
+                    source_match_id="today-finished-missing-winner",
+                    source_tournament_id=tournament.source_tournament_id,
+                    tournament_id=tournament.id,
+                    round_name="Round 3",
+                    scheduled_at_utc=datetime(2026, 5, 28, 10, 0, tzinfo=UTC),
+                    player1_name="Aryna Sabalenka",
+                    player2_name="Daria Kasatkina",
+                    player1_seed=1,
+                    status="finished",
+                    score_text="6-0,7-5",
+                    winner_name="Aryna Sabalenka",
+                    is_key_match=True,
+                    metadata={
+                        "MatchState": "F",
+                        "ScoreString": "6-0,7-5",
+                        "Winner": "2",
+                        "PlayerNameFirstA": "Aryna",
+                        "PlayerNameLastA": "Sabalenka",
+                        "PlayerNameFirstB": "Daria",
+                        "PlayerNameLastB": "Kasatkina",
+                        "RoundID": "3",
+                        "MatchTimeStamp": "2026-05-28T10:00:00+00:00",
+                    },
+                )
+            ]
+        )[0]
+        session.flush()
+
+        match_repo.create_snapshot(
+            match_id=match.id,
+            snapshot_type="upstream_sync",
+            snapshot_hash="old-live",
+            payload={
+                "MatchState": "P",
+                "ScoreString": "6-0,5-4",
+                "Winner": "0",
+                "PlayerNameFirstA": "Aryna",
+                "PlayerNameLastA": "Sabalenka",
+                "PlayerNameFirstB": "Daria",
+                "PlayerNameLastB": "Kasatkina",
+                "RoundID": "3",
+                "MatchTimeStamp": "2026-05-28T10:00:00+00:00",
+            },
+        )
+        match_repo.create_snapshot(
+            match_id=match.id,
+            snapshot_type="upstream_sync",
+            snapshot_hash="new-finished-missing-winner",
+            payload={
+                "MatchState": "F",
+                "ScoreString": "6-0,7-5",
+                "Winner": "0",
+                "PlayerNameFirstA": "Aryna",
+                "PlayerNameLastA": "Sabalenka",
+                "PlayerNameFirstB": "Daria",
+                "PlayerNameLastB": "Kasatkina",
+                "RoundID": "3",
+                "MatchTimeStamp": "2026-05-28T10:00:00+00:00",
+            },
+        )
+        match_repo.create_snapshot(
+            match_id=match.id,
+            snapshot_type="upstream_sync",
+            snapshot_hash="latest-finished-complete",
+            payload=match.metadata_json,
+        )
+        session.commit()
+
+        service = DiffService(settings=AppSettings(), session=session)
+        result = service.detect_and_queue_jobs(now_utc=datetime(2026, 5, 28, 12, 0, tzinfo=UTC))
+
+        jobs = session.scalars(
+            select(PublishJob).where(PublishJob.job_type == "result_article").order_by(PublishJob.id.asc())
+        ).all()
+
+        assert len(result.result_changes) == 1
+        assert len(result.created_job_ids) == 2
+        assert len(jobs) == 1
+        assert jobs[0].biz_key == f"result:{match.id}"
+        assert jobs[0].payload["winner_name"] == "Aryna Sabalenka"
+        assert jobs[0].payload["score_text"] == "6-0,7-5"
+
+
 def test_detect_and_queue_jobs_skips_today_schedule_when_partial_and_far_away() -> None:
     session_factory = _build_service()
 
