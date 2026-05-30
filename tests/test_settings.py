@@ -14,6 +14,6 @@ def test_settings_defaults(monkeypatch) -> None:
     assert settings.source_provider == "wta"
     assert settings.database_url.startswith("sqlite:///")
     assert settings.wechat_publish_enabled is False
-    assert settings.wechat_author == "tennis-news"
+    assert settings.wechat_author == "happy"
     assert settings.wechat_default_cover_media_id == ""
     assert settings.wechat_publish_max_retries == 3

@@ -147,7 +147,7 @@ def test_detect_and_queue_jobs_creates_next_day_schedule_job_and_same_day_result
         assert result.schedule_target_date == date(2026, 5, 29)
         assert result.schedule_target_dates == [date(2026, 5, 28), date(2026, 5, 29)]
         assert len(result.result_changes) == 1
-        assert len(result.schedule_changes) == 2
+        assert len(result.schedule_changes) == 1
         assert len(jobs) == 3
         assert jobs[0].job_type == "result_article"
         assert jobs[0].biz_key == f"result:{today_match[0].id}"
@@ -430,6 +430,204 @@ def test_detect_and_queue_jobs_updates_today_schedule_job_when_content_changes()
         assert jobs[1].biz_key == f"schedule:{tournament.id}:2026-05-28"
         assert jobs[1].payload["is_update"] is True
         assert jobs[1].payload["previous_job_id"] == jobs[0].id
+        assert jobs[1].payload["release_version"] == 2
+
+
+def test_detect_and_queue_jobs_skips_schedule_update_for_non_scheduled_status_change() -> None:
+    session_factory = _build_service()
+
+    with session_factory() as session:
+        tournament_repo = TournamentRepository(session)
+        match_repo = MatchRepository(session)
+        publish_repo = PublishJobRepository(session)
+
+        tournament = tournament_repo.upsert_many(
+            [
+                NormalizedTournament(
+                    source="wta",
+                    source_tournament_id="800:2026:2026-05-28:2026-06-02",
+                    name="Roland Garros",
+                    tour="grand_slam",
+                    start_date=date(2026, 5, 28),
+                    end_date=date(2026, 6, 2),
+                )
+            ]
+        )[0]
+        session.flush()
+
+        match = match_repo.upsert_many(
+            [
+                NormalizedMatch(
+                    source="wta",
+                    source_match_id="today-finished",
+                    source_tournament_id=tournament.source_tournament_id,
+                    tournament_id=tournament.id,
+                    round_name="Quarterfinal",
+                    scheduled_at_utc=datetime(2026, 5, 28, 14, 0, tzinfo=UTC),
+                    court_name="Center Court",
+                    player1_name="Player A",
+                    player2_name="Player B",
+                    status="finished",
+                    score_text="6-4,6-4",
+                    winner_name="Player A",
+                    metadata={
+                        "MatchState": "F",
+                        "PlayerNameFirstA": "Player",
+                        "PlayerNameLastA": "A",
+                        "PlayerNameFirstB": "Player",
+                        "PlayerNameLastB": "B",
+                        "RoundID": "5",
+                        "MatchTimeStamp": "2026-05-28T14:00:00+00:00",
+                        "Venue": {"name": "Center Court"},
+                        "ScoreString": "6-4,6-4",
+                        "Winner": "2",
+                    },
+                )
+            ]
+        )[0]
+        session.flush()
+
+        match_repo.create_snapshot(
+            match_id=match.id,
+            snapshot_type="upstream_sync",
+            snapshot_hash="old",
+            payload={
+                "MatchState": "S",
+                "PlayerNameFirstA": "Player",
+                "PlayerNameLastA": "A",
+                "PlayerNameFirstB": "Player",
+                "PlayerNameLastB": "B",
+                "RoundID": "5",
+                "MatchTimeStamp": "2026-05-28T14:00:00+00:00",
+                "Venue": {"name": "Center Court"},
+            },
+        )
+        match_repo.create_snapshot(
+            match_id=match.id,
+            snapshot_type="upstream_sync",
+            snapshot_hash="new",
+            payload=match.metadata_json,
+        )
+        session.flush()
+
+        publish_repo.create(
+            job_type="schedule_article",
+            biz_key=f"schedule:{tournament.id}:2026-05-28",
+            content_hash="existing-hash",
+            payload={"matches": []},
+            status="success",
+        )
+        session.commit()
+
+        service = DiffService(settings=AppSettings(), session=session)
+        result = service.detect_and_queue_jobs(now_utc=datetime(2026, 5, 28, 12, 0, tzinfo=UTC))
+
+        jobs = session.scalars(
+            select(PublishJob)
+            .where(PublishJob.job_type == "schedule_article")
+            .order_by(PublishJob.id.asc())
+        ).all()
+
+        assert result.schedule_changes == []
+        assert len(result.result_changes) == 1
+        assert len(jobs) == 1
+
+
+def test_detect_and_queue_jobs_updates_schedule_when_status_returns_to_scheduled() -> None:
+    session_factory = _build_service()
+
+    with session_factory() as session:
+        tournament_repo = TournamentRepository(session)
+        match_repo = MatchRepository(session)
+        publish_repo = PublishJobRepository(session)
+
+        tournament = tournament_repo.upsert_many(
+            [
+                NormalizedTournament(
+                    source="wta",
+                    source_tournament_id="800:2026:2026-05-28:2026-06-02",
+                    name="Roland Garros",
+                    tour="grand_slam",
+                    start_date=date(2026, 5, 28),
+                    end_date=date(2026, 6, 2),
+                )
+            ]
+        )[0]
+        session.flush()
+
+        match = match_repo.upsert_many(
+            [
+                NormalizedMatch(
+                    source="wta",
+                    source_match_id="today-rescheduled",
+                    source_tournament_id=tournament.source_tournament_id,
+                    tournament_id=tournament.id,
+                    round_name="Quarterfinal",
+                    scheduled_at_utc=datetime(2026, 5, 28, 14, 0, tzinfo=UTC),
+                    court_name="Center Court",
+                    player1_name="Player A",
+                    player2_name="Player B",
+                    status="scheduled",
+                    metadata={
+                        "MatchState": "S",
+                        "PlayerNameFirstA": "Player",
+                        "PlayerNameLastA": "A",
+                        "PlayerNameFirstB": "Player",
+                        "PlayerNameLastB": "B",
+                        "RoundID": "5",
+                        "MatchTimeStamp": "2026-05-28T14:00:00+00:00",
+                        "Venue": {"name": "Center Court"},
+                    },
+                )
+            ]
+        )[0]
+        session.flush()
+
+        match_repo.create_snapshot(
+            match_id=match.id,
+            snapshot_type="upstream_sync",
+            snapshot_hash="old",
+            payload={
+                "MatchState": "D",
+                "PlayerNameFirstA": "Player",
+                "PlayerNameLastA": "A",
+                "PlayerNameFirstB": "Player",
+                "PlayerNameLastB": "B",
+                "RoundID": "5",
+                "MatchTimeStamp": "2026-05-28T14:00:00+00:00",
+                "Venue": {"name": "Center Court"},
+            },
+        )
+        match_repo.create_snapshot(
+            match_id=match.id,
+            snapshot_type="upstream_sync",
+            snapshot_hash="new",
+            payload=match.metadata_json,
+        )
+        session.flush()
+
+        publish_repo.create(
+            job_type="schedule_article",
+            biz_key=f"schedule:{tournament.id}:2026-05-28",
+            content_hash="existing-hash",
+            payload={"matches": []},
+            status="success",
+        )
+        session.commit()
+
+        service = DiffService(settings=AppSettings(), session=session)
+        result = service.detect_and_queue_jobs(now_utc=datetime(2026, 5, 28, 12, 0, tzinfo=UTC))
+
+        jobs = session.scalars(
+            select(PublishJob)
+            .where(PublishJob.job_type == "schedule_article")
+            .order_by(PublishJob.id.asc())
+        ).all()
+
+        assert len(result.schedule_changes) == 1
+        assert result.schedule_changes[0].change_types == ["status_changed"]
+        assert len(jobs) == 2
+        assert jobs[1].payload["is_update"] is True
         assert jobs[1].payload["release_version"] == 2
 
 

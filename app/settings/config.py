@@ -33,7 +33,7 @@ class AppSettings(BaseSettings):
     wechat_publish_enabled: bool = False
     wechat_app_id: str = ""
     wechat_app_secret: str = ""
-    wechat_author: str = "tennis-news"
+    wechat_author: str = "happy"
     wechat_default_cover_media_id: str = ""
     wechat_default_cover_image_path: str = ""
     wechat_timeout_seconds: float = 20.0

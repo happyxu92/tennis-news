@@ -133,6 +133,10 @@ class DiffService:
                             )
                         )
 
+        changed_schedule_groups = {
+            (change.tournament_id, change.target_date) for change in result.schedule_changes
+        }
+
         for (
             tournament_id,
             target_date,
@@ -145,6 +149,7 @@ class DiffService:
                 matches=schedule_matches,
                 target_date=target_date,
                 current_time=current_time,
+                has_changes=(tournament_id, target_date) in changed_schedule_groups,
                 result=result,
             )
 
@@ -163,6 +168,7 @@ class DiffService:
         matches: list[Match],
         target_date: date,
         current_time: datetime,
+        has_changes: bool,
         result: DiffRunResult,
     ) -> None:
         if not matches:
@@ -173,6 +179,10 @@ class DiffService:
 
         normalized_matches = sorted(matches, key=self._schedule_sort_key)
         biz_key = f"schedule:{tournament.id}:{target_date.isoformat()}"
+        latest_job = self.publish_jobs.get_latest_by_biz_key(SCHEDULE_JOB_TYPE, biz_key)
+        if latest_job is not None and not has_changes:
+            return
+
         release_version = self.publish_jobs.count_by_biz_key(SCHEDULE_JOB_TYPE, biz_key) + 1
         payload = {
             "source": tournament.source,
@@ -191,7 +201,6 @@ class DiffService:
         ):
             return
 
-        latest_job = self.publish_jobs.get_latest_by_biz_key(SCHEDULE_JOB_TYPE, biz_key)
         if latest_job is not None:
             payload["is_update"] = True
             payload["previous_job_id"] = latest_job.id
@@ -297,7 +306,8 @@ class DiffService:
             or self._payload_value(previous_payload, "player2_name") != match.player2_name
         ):
             change_types.append("players_changed")
-        if self._payload_value(previous_payload, "status") != match.status:
+        previous_status = self._payload_value(previous_payload, "status")
+        if previous_status != match.status and match.status == "scheduled":
             change_types.append("status_changed")
         return change_types
 
