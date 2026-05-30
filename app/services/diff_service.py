@@ -295,10 +295,6 @@ class DiffService:
         change_types: list[str] = []
         if self._payload_value(previous_payload, "round_name") != match.round_name:
             change_types.append("round_changed")
-        if self._payload_value(previous_payload, "scheduled_at_utc") != self._serialize_datetime(
-            match.scheduled_at_utc
-        ):
-            change_types.append("time_changed")
         if self._payload_value(previous_payload, "court_name") != match.court_name:
             change_types.append("court_changed")
         if (
@@ -306,8 +302,9 @@ class DiffService:
             or self._payload_value(previous_payload, "player2_name") != match.player2_name
         ):
             change_types.append("players_changed")
-        previous_status = self._payload_value(previous_payload, "status")
-        if previous_status != match.status and match.status == "scheduled":
+        previous_has_schedule = self._payload_has_scheduled_time(previous_payload)
+        current_has_schedule = match.scheduled_at_utc is not None
+        if not previous_has_schedule and current_has_schedule:
             change_types.append("status_changed")
         return change_types
 
@@ -430,6 +427,11 @@ class DiffService:
                 return self._build_player_name(payload, "B")
             return None
         return None
+
+    def _payload_has_scheduled_time(self, payload: dict) -> bool:
+        if payload.get("Unscheduled") is True and payload.get("isEstimatedStartTime") is True:
+            return False
+        return self._payload_value(payload, "scheduled_at_utc") is not None
 
     def _build_player_name(self, payload: dict, suffix: str) -> str | None:
         first = payload.get(f"PlayerNameFirst{suffix}") or ""
